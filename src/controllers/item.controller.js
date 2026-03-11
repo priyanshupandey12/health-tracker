@@ -1,7 +1,11 @@
+// controllers/foodController.js
 const Item = require("../models/Item.model");
+const { resolveAlias } = require("../constant/searchAlias");
+
+// ── Helper: round to 2 decimal places ────────────────────────
 const r = (val) => Math.round((val || 0) * 100) / 100;
 
-
+// ── Helper: format full nutrition (for single item response) ─
 const formatNutrition = (item) => ({
   _id:       item._id,
   name:      item.name,
@@ -10,14 +14,14 @@ const formatNutrition = (item) => ({
   source:    item.source,
   tags:      item.tags,
 
-
+  // Macros
   calories: r(item.calories),
   protein:  r(item.protein),
   carbs:    r(item.carbs),
   fats:     r(item.fats),
   fiber:    r(item.fiber),
 
-
+  // Vitamins
   vitaminA:   r(item.vitaminA),
   vitaminC:   r(item.vitaminC),
   vitaminD:   r(item.vitaminD),
@@ -28,6 +32,7 @@ const formatNutrition = (item) => ({
   vitaminB12: r(item.vitaminB12),
   folate:     r(item.folate),
 
+  // Minerals
   iron:       r(item.iron),
   calcium:    r(item.calcium),
   zinc:       r(item.zinc),
@@ -36,14 +41,14 @@ const formatNutrition = (item) => ({
   sodium:     r(item.sodium),
   phosphorus: r(item.phosphorus),
 
-
+  // Fats detail
   saturatedFat: r(item.saturatedFat),
   transFat:     r(item.transFat),
 
   yieldFactor: item.yieldFactor || 1,
 });
 
-
+// ── Helper: format card (lightweight — for search results) ───
 const formatCard = (item) => ({
   _id:       item._id,
   name:      item.name,
@@ -57,11 +62,13 @@ const formatCard = (item) => ({
   fiber:     r(item.fiber),
 });
 
-
+// ─────────────────────────────────────────────────────────────
+// GET /api/foods/search?q=masoor&limit=10
+// ─────────────────────────────────────────────────────────────
 const searchFoods = async (req, res) => {
   try {
     const query = req.query.q?.trim();
-    const limit = Math.min(parseInt(req.query.limit) || 10, 20); 
+    const limit = Math.min(parseInt(req.query.limit) || 10, 20); // max 20
 
     if (!query || query.length < 2) {
       return res.status(400).json({
@@ -70,23 +77,28 @@ const searchFoods = async (req, res) => {
       });
     }
 
- 
+    // Alias resolve karo — "chapati" → "wheat flour", "doodh" → "milk"
+    const resolvedQuery = resolveAlias(query);
+    const aliasUsed     = resolvedQuery !== query;
+
+    // Hybrid search — regex across name, localName, tags, category
     const results = await Item.find({
       $or: [
-        { name:      { $regex: query, $options: "i" } },
-        { localName: { $regex: query, $options: "i" } },
-        { tags:      { $regex: query, $options: "i" } },
-        { category:  { $regex: query, $options: "i" } },
+        { name:      { $regex: resolvedQuery, $options: "i" } },
+        { localName: { $regex: resolvedQuery, $options: "i" } },
+        { tags:      { $regex: resolvedQuery, $options: "i" } },
+        { category:  { $regex: resolvedQuery, $options: "i" } },
       ],
     })
       .limit(limit)
       .select("name localName category source calories protein carbs fats fiber");
 
     res.status(200).json({
-      success: true,
-      count:   results.length,
+      success:       true,
+      count:         results.length,
       query,
-      results: results.map(formatCard),
+      resolvedQuery: aliasUsed ? resolvedQuery : undefined,
+      results:       results.map(formatCard),
     });
   } catch (error) {
     console.error("Food search error:", error);
@@ -94,7 +106,9 @@ const searchFoods = async (req, res) => {
   }
 };
 
-
+// ─────────────────────────────────────────────────────────────
+// GET /api/foods/:id
+// ─────────────────────────────────────────────────────────────
 const getFoodById = async (req, res) => {
   try {
     const item = await Item.findById(req.params.id);
@@ -116,7 +130,10 @@ const getFoodById = async (req, res) => {
   }
 };
 
-
+// ─────────────────────────────────────────────────────────────
+// GET /api/foods/:id/portions
+// Returns katori/bowl/glass → grams + nutrition for each portion
+// ─────────────────────────────────────────────────────────────
 
 // Standard portion sizes in ml (volume-based)
 const PORTION_SIZES = {
@@ -128,19 +145,13 @@ const PORTION_SIZES = {
 
 // Density map — category ke basis pe (g/ml)
 const getCategoryDensity = (category = "") => {
-  const c = category.toLowerCase();
-
-  if (c.includes("legume"))                        return 1.05; // Grain Legumes (dal)
-  if (c.includes("cereal") || c.includes("millet"))return 0.90; // Cereals and Millets
-  if (c.includes("vegetable") || c.includes("leafy")) return 0.85; // Vegetables
-  if (c.includes("roots") || c.includes("tuber"))  return 0.95; // Aloo, Shakarkand
-  if (c.includes("milk") || c.includes("dairy"))   return 1.03; // Milk products
-  if (c.includes("meat") || c.includes("poultry")) return 0.95; // Meat
-  if (c.includes("fish"))                          return 1.02; // Fish
-  if (c.includes("egg"))                           return 1.0;  // Eggs
-  if (c.includes("fat") || c.includes("oil"))      return 0.92; // Oils
-  if (c.includes("fruit"))                         return 0.85; // Fruits
-  if (c.includes("nut") || c.includes("seed"))     return 0.65; // Nuts (dense)
+  const cat = category.toLowerCase();
+  if (cat.includes("pulse") || cat.includes("dal"))      return 1.05;
+  if (cat.includes("cereal") || cat.includes("rice"))    return 0.90;
+  if (cat.includes("vegetable"))                         return 0.85;
+  if (cat.includes("milk") || cat.includes("dairy"))     return 1.03;
+  if (cat.includes("meat") || cat.includes("fish"))      return 0.95;
+  if (cat.includes("oil") || cat.includes("fat"))        return 0.92;
   return 0.90; // default
 };
 
@@ -167,7 +178,7 @@ const getFoodPortions = async (req, res) => {
 
     const density = getCategoryDensity(item.category);
 
-  
+    // Helper: calculate nutrition for given grams
     const nutritionForGrams = (grams) => {
       const m = grams / 100;
       return {
@@ -184,7 +195,7 @@ const getFoodPortions = async (req, res) => {
 
     const portions = [];
 
-   
+    // 1. Volume-based portions (katori, bowl, glass, plate)
     for (const [unit, sizes] of Object.entries(PORTION_SIZES)) {
       for (const [size, ml] of Object.entries(sizes)) {
         const grams = Math.round(ml * density);
@@ -199,7 +210,7 @@ const getFoodPortions = async (req, res) => {
       }
     }
 
- 
+    // 2. Spoon-based portions
     portions.push(
       {
         unit: "tablespoon", size: "standard", ml: 15,
@@ -215,7 +226,7 @@ const getFoodPortions = async (req, res) => {
       }
     );
 
-
+    // 3. Mutthi (handful)
     portions.push({
       unit: "mutthi", size: "standard", ml: null,
       grams: 35,
@@ -223,7 +234,7 @@ const getFoodPortions = async (req, res) => {
       label: "1 Mutthi / Handful (~35g)",
     });
 
-
+    // 4. Countable — check if item matches (roti, egg etc.)
     const itemNameLower = item.name.toLowerCase();
     for (const [keyword, gramsPerPiece] of Object.entries(COUNTABLE_ITEMS)) {
       if (itemNameLower.includes(keyword)) {
@@ -237,7 +248,7 @@ const getFoodPortions = async (req, res) => {
       }
     }
 
-
+    // 5. Always include direct grams option
     portions.push({
       unit: "grams", size: "standard", ml: null,
       grams: 100,

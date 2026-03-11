@@ -1,18 +1,15 @@
 const express = require("express");
 const router  = express.Router();
 const authMiddleware = require("../middleware/auth.middleware");
-const { getToday, getByDate, getHistory } = require("../controllers/record.controller");
+
 const { addMeal, editMeal, deleteMeal, updateWater } = require("../controllers/meal.controller");
 
 
-router.get("/today",    authMiddleware, getToday);
-router.get("/history",  authMiddleware, getHistory);
-router.get("/:date",    authMiddleware, getByDate);      
-
-
-router.post("/today/meals", authMiddleware, addMeal);
-router.patch("/today/meals/:mealId", authMiddleware, editMeal);
-router.delete("/today/meals/:mealId", authMiddleware, deleteMeal);
+   
+router.post("/today/", authMiddleware, addMeal);
 router.patch("/today/water", authMiddleware, updateWater);
+router.patch("/today/:mealId", authMiddleware, editMeal);
+router.delete("/today/:mealId", authMiddleware, deleteMeal);
+
 
 module.exports = router;
