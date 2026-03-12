@@ -6,19 +6,60 @@ const { getRDA } = require("../utils/rda");
 const r = (val) => Math.round((val || 0) * 100) / 100;
 
 
-const startOfDay = (date) => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
+
+const getISTDateParts = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const obj = {};
+  parts.forEach(p => obj[p.type] = p.value);
+
+  return {
+    year: Number(obj.year),
+    month: Number(obj.month),
+    day: Number(obj.day)
+  };
+};
+
+const startOfDay = (date = new Date()) => {
+  const { year, month, day } = getISTDateParts(date);
+
+  return new Date(Date.UTC(
+    year,
+    month - 1,
+    day,
+    -5,
+    -30,
+    0,
+    0
+  ));
+};
+
+const endOfDay = (date = new Date()) => {
+ const { year, month, day } = getISTDateParts(date);
+
+  return new Date(Date.UTC(
+    year,
+    month - 1,
+    day,
+    18,
+    29,
+    59,
+    999
+  ));
 };
 
 
-const endOfDay = (date) => {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
-};
+const formatDateIST = (date) => {
+  return new Date(date).toLocaleDateString("en-CA", {
+    timeZone: "Asia/Kolkata",
+  });
 
+};
 
 const calculateDietScore = (totals, rda) => {
   const nutrients = [
@@ -35,7 +76,6 @@ const calculateDietScore = (totals, rda) => {
   return Math.round(avg);
 };
 
-
 const calculateRDACompletion = (totals, rda) => {
   const keys = [
     "calories", "protein", "carbs", "fats", "fiber",
@@ -50,7 +90,6 @@ const calculateRDACompletion = (totals, rda) => {
   });
   return result;
 };
-
 
 const reaggregateTotals = async (recordId) => {
   const entries = await MealEntry.find({ record: recordId });
@@ -78,7 +117,6 @@ const reaggregateTotals = async (recordId) => {
   return totals;
 };
 
-
 const formatEntry = (entry) => ({
   _id:             entry._id,
   mealType:        entry.mealType,
@@ -92,12 +130,10 @@ const formatEntry = (entry) => ({
   item:            entry.item,
 });
 
-
 const getToday = async (req, res) => {
   try {
     const user  = req.user;
     const today = new Date();
-
 
     let existingRecord = await Record.findOne({
       user: user._id,
@@ -105,7 +141,6 @@ const getToday = async (req, res) => {
     });
 
     const isNewRecord = !existingRecord;
-
 
     let record = existingRecord;
     if (!record) {
@@ -116,15 +151,12 @@ const getToday = async (req, res) => {
       });
     }
 
-
     const totals        = await reaggregateTotals(record._id);
     const rda           = getRDA(user.gender, user.age);
     const rdaCompletion = calculateRDACompletion(totals, rda);
     const dietScore     = calculateDietScore(totals, rda);
 
-
     await Record.findByIdAndUpdate(record._id, { totals, rdaCompletion, dietScore });
-
 
     const entries = await MealEntry.find({ record: record._id })
       .populate("item", "name category")
@@ -143,8 +175,8 @@ const getToday = async (req, res) => {
       success: true,
       record: {
         _id:           record._id,
-        date:          record.date,
-        isNewRecord,                 
+        date:          formatDateIST(record.date), 
+        isNewRecord,
         waterIntake:   record.waterIntake,
         waterTarget:   record.waterTarget,
         dietScore,
@@ -160,94 +192,201 @@ const getToday = async (req, res) => {
   }
 };
 
-
 const getByDate = async (req, res) => {
   try {
-    const user = req.user;
+    const user     = req.user;
+    const dateParam = req.params.date;
 
 
-    const parts = req.params.date.split("-");
-    if (parts.length !== 3) {
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(dateParam)) {
       return res.status(400).json({
         success: false,
         message: "Invalid date format. Use YYYY-MM-DD.",
       });
     }
 
-    const [year, month, day] = parts;
-    const date = new Date(year, month - 1, day); 
 
-    if (isNaN(date)) {
+    const [year, month, day] = dateParam.split("-").map(Number);
+ 
+
+    const date = new Date(year, month - 1, day);
+
+
+    if (isNaN(date.getTime())) {
       return res.status(400).json({
         success: false,
-        message: "Invalid date. Use YYYY-MM-DD.",
+        message: "Invalid date. Please check the date values.",
       });
     }
+
+
+    const today = new Date();
+    if (date > today) {
+      return res.status(400).json({
+        success: false,
+        message: "Future date ka record nahi ho sakta.",
+      });
+    }
+
 
     const record = await Record.findOne({
       user: user._id,
       date: { $gte: startOfDay(date), $lte: endOfDay(date) },
     });
 
+
     if (!record) {
       return res.status(404).json({
         success: false,
-        message: "No record found for this date.",
+        message: `${dateParam} ka koi record nahi mila. Us din kuch log nahi kiya tha.`,
       });
     }
+
 
     const entries = await MealEntry.find({ record: record._id })
       .populate("item", "name category")
       .sort({ createdAt: 1 });
+ 
 
     const meals = {
-      pre_breakfast: [], breakfast: [],
-      lunch: [], dinner: [], snack: [],
+      pre_breakfast: [],
+      breakfast:     [],
+      lunch:         [],
+      dinner:        [],
+      snack:         [],
     };
     entries.forEach((e) => meals[e.mealType]?.push(formatEntry(e)));
 
     const rda = getRDA(user.gender, user.age);
 
+
     res.status(200).json({
       success: true,
       record: {
         _id:           record._id,
-        date:          record.date,
+        date:          formatDateIST(record.date),
+
+
         waterIntake:   record.waterIntake,
         waterTarget:   record.waterTarget,
         dietScore:     record.dietScore,
+  
+
         totals:        record.totals,
         rdaCompletion: record.rdaCompletion,
         rda,
         meals,
       },
     });
+
+
   } catch (error) {
     console.error("Get by date error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch record." });
   }
 };
 
+
 const getHistory = async (req, res) => {
   try {
     const user = req.user;
-    const days = Math.min(parseInt(req.query.days) || 30, 90);
+    const { days } = req.query;
+
+
+    if (days !== undefined) {
+      const daysNum = Number(days);
+
+      if (isNaN(daysNum) || !Number.isInteger(daysNum) || daysNum <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "days must be a positive integer. e.g. ?days=7",
+        });
+      }
+
+
+      if (daysNum > 7) {
+        return res.status(400).json({
+          success: false,
+          message: "Maximum 7 days ka history fetch ho sakta hai.",
+        });
+      }
+
+    }
+
+    const requestedDays = days ? Number(days) : 7;
+
+
     const from = new Date();
-    from.setDate(from.getDate() - days);
+    from.setDate(from.getDate() - requestedDays);
 
 
     const records = await Record.find({
       user: user._id,
       date: { $gte: startOfDay(from) },
     })
-      .sort({ date: -1 })
-      .select("date dietScore totals waterIntake");
+      .sort({ date: 1 })
+      .select("date dietScore totals waterIntake waterTarget");
+
+
+    const formatted = records.map((rec) => ({
+      date:        formatDateIST(rec.date),
+
+
+      dietScore:   rec.dietScore,
+
+      calories:    rec.totals?.calories   || 0,
+      protein:     rec.totals?.protein    || 0,
+      carbs:       rec.totals?.carbs      || 0,
+      fats:        rec.totals?.fats       || 0,
+      fiber:       rec.totals?.fiber      || 0,
+      iron:        rec.totals?.iron       || 0,
+
+
+      waterIntake: rec.waterIntake || 0,
+      waterTarget: rec.waterTarget || 8,
+    }));
+
+
+
+    const filledData = [];
+    for (let i = requestedDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = formatDateIST(d);
+
+
+      const existing = formatted.find((r) => r.date === dateStr);
+
+
+      if (existing) {
+        filledData.push(existing);
+      } else {
+        filledData.push({
+          date:        dateStr,
+          dietScore:   0,
+          calories:    0,
+          protein:     0,
+          carbs:       0,
+          fats:        0,
+          fiber:       0,
+          iron:        0,
+          waterIntake: 0,
+          waterTarget: user.dailyWaterTarget || 8,
+          noData:      true,
+    
+        });
+      }
+    }
+
 
     res.status(200).json({
-      success: true,
-      count:   records.length,
-      records,
+      success:       true,
+      days:          requestedDays,
+      totalRecords:  records.length,
+      data:          filledData,
     });
+
   } catch (error) {
     console.error("Get history error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch history." });
