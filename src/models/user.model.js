@@ -42,9 +42,17 @@ const userSchema = new mongoose.Schema(
       default: "maintain",
     },
 
-      bmi: { type: Number },
+     bmi:                { type: Number, default: 0    },
     dailyCalorieTarget: { type: Number, default: 2000 },
-    dailyWaterTarget: { type: Number, default: 8 }
+    dailyWaterTarget:   { type: Number, default: 8    }, 
+ 
+  
+    macroTargets: {
+      protein: { type: Number, default: 50  },
+      carbs:   { type: Number, default: 250 },
+      fats:    { type: Number, default: 55  },
+      fiber:   { type: Number, default: 28  },
+    },
 
   },
   { timestamps: true }
